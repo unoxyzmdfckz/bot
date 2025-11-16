@@ -28,23 +28,25 @@
 </head>
 <body>
   <h1>Color Bet Arena</h1>
+
   <div id="lobby">
     <button id="joinBtn">JOIN ROUND</button>
     <button id="balanceBtn">Balance</button>
   </div>
 
   <div id="game" style="display:none;">
-    <div id="status">Loading...</div>
+    <div id="status">Loading…</div>
     <div id="timer">--</div>
     <div id="pot">Pot: 0</div>
     <div id="betInput">
-      <input type="number" id="amount" placeholder="Min 100" min="100" style="padding:10px; width:130px; margin:8px; border-radius:8px; border:none;" />
+      <input type="number" id="amount" placeholder="Min 100" min="100"
+             style="padding:10px; width:130px; margin:8px; border-radius:8px; border:none;" />
       <div>
-        <div class="color-btn red" data-color="red"></div>
-        <div class="color-btn blue" data-color="blue"></div>
+        <div class="color-btn red"   data-color="red"></div>
+        <div class="color-btn blue"  data-color="blue"></div>
         <div class="color-btn green" data-color="green"></div>
-        <div class="color-btn yellow" data-color="yellow"></div>
-        <div class="color-btn purple" data-color="purple"></div>
+        <div class="color-btn yellow"data-color="yellow"></div>
+        <div class="color-btn purple"data-color="purple"></div>
       </div>
     </div>
     <div id="myBet"></div>
@@ -56,55 +58,64 @@
   <script>
     const tg = window.Telegram.WebApp;
     tg.ready(); tg.expand();
-    const user = tg.initDataUnsafe.user;
-    const chatId = tg.initDataUnsafe.chat?.id || 'private';
-    const userId = user.id.toString();
-    const username = user.username ? `@${user.username}` : user.first_name || 'Player';
 
-    const COLORS = ['red', 'blue', 'green', 'yellow', 'purple'];
-    const COLOR_NAME = { red:'Red', blue:'Blue', green:'Green', yellow:'Yellow', purple:'Purple' };
-    const COLOR_HEX = { red:'#e74c3c', blue:'#3498db', green:'#2ecc71', yellow:'#f1c40f', purple:'#9b59b6' };
+    const user    = tg.initDataUnsafe.user;
+    const chatId  = tg.initDataUnsafe.chat?.id || 'private';
+    const userId  = user.id.toString();
+    const username = user.username ? `@${user.username}` : (user.first_name || 'Player');
 
-    const GAME_KEY = `cba_game_${chatId}`;
+    const COLORS = ['red','blue','green','yellow','purple'];
+    const COLOR_NAME = {red:'Red',blue:'Blue',green:'Green',yellow:'Yellow',purple:'Purple'};
+    const COLOR_HEX  = {red:'#e74c3c',blue:'#3498db',green:'#2ecc71',yellow:'#f1c40f',purple:'#9b59b6'};
+
+    const GAME_KEY    = `cba_game_${chatId}`;
     const PROFILE_KEY = `cba_profile_${userId}`;
 
     let game = null;
-    let profile = { balance: 10000, wins: 0 };
+    let profile = {balance:10000, wins:0, totalBet:0, net:0};
     let pollInterval = null;
     let timerInterval = null;
 
-    // === LOAD DATA ===
+    /* --------------------------------------------------------------
+       LOAD / SAVE
+    -------------------------------------------------------------- */
     async function loadData() {
       try {
-        const [gameData, profileData] = await Promise.all([
+        const [g,p] = await Promise.all([
           tg.CloudStorage.getItem(GAME_KEY),
           tg.CloudStorage.getItem(PROFILE_KEY)
         ]);
 
-        game = gameData ? JSON.parse(gameData) : {
-          round: 0, players: [], bets: {}, pot: 0, status: 'waiting',
-          winner: null, endTime: 0, winners: [], payouts: {}
+        game = g ? JSON.parse(g) : {
+          round:0, players:[], bets:{}, pot:0, status:'waiting',
+          winner:null, endTime:0, winners:[], payouts:{}
         };
 
-        if (profileData) profile = JSON.parse(profileData);
-        else profile = { balance: 10000, wins: 0, totalBet: 0, net: 0 };
+        if (p) profile = JSON.parse(p);
+        else   profile = {balance:10000, wins:0, totalBet:0, net:0};
+
+        // first load finished → attach handlers
+        if (!document.getElementById('joinBtn').onclick) attachHandlers();
 
         updateUI();
-      } catch (e) { console.error(e); }
+      } catch(e){ console.error(e); }
     }
 
-    // === SAVE ===
-    function saveGame() { tg.CloudStorage.setItem(GAME_KEY, JSON.stringify(game)); }
+    function saveGame()    { tg.CloudStorage.setItem(GAME_KEY, JSON.stringify(game)); }
     function saveProfile() { tg.CloudStorage.setItem(PROFILE_KEY, JSON.stringify(profile)); }
 
-    // === UPDATE UI ===
+    /* --------------------------------------------------------------
+       UI
+    -------------------------------------------------------------- */
     function updateUI() {
-      const now = Date.now();
-      const timeLeft = game.endTime ? Math.max(0, Math.ceil((game.endTime - now) / 1000)) : 0;
+      if (!game) return;
 
-      // Lobby or Game
+      const now = Date.now();
+      const left = game.endTime ? Math.max(0, Math.ceil((game.endTime - now)/1000)) : 0;
+
+      // lobby / game
       document.getElementById('lobby').style.display = game.status === 'waiting' ? 'block' : 'none';
-      document.getElementById('game').style.display = game.status !== 'waiting' ? 'block' : 'none';
+      document.getElementById('game').style.display  = game.status !== 'waiting' ? 'block' : 'none';
 
       if (game.status === 'waiting') {
         document.getElementById('status').innerHTML = '<b>Next round starts when someone joins!</b>';
@@ -112,14 +123,13 @@
       }
 
       if (game.status === 'betting') {
-        document.getElementById('timer').textContent = timeLeft;
-        document.getElementById('pot').textContent = `Pot: ${game.pot.toLocaleString()}`;
+        document.getElementById('timer').textContent = left;
+        document.getElementById('pot').textContent   = `Pot: ${game.pot.toLocaleString()}`;
         document.getElementById('status').innerHTML = `
           <b>Round ${game.round}</b><br>
-          Players: ${game.players.length}/12 | Time left: ${timeLeft}s
+          Players: ${game.players.length}/12 | Time left: ${left}s
         `;
-        renderBets();
-        renderMyBet();
+        renderBets(); renderMyBet();
       }
 
       if (game.status === 'spinning') {
@@ -128,22 +138,21 @@
         document.getElementById('betInput').style.display = 'none';
       }
 
-      if (game.status === 'finished') {
-        showResult();
-      }
+      if (game.status === 'finished') showResult();
 
-      // Auto-end betting
-      if (timeLeft <= 0 && game.status === 'betting') endBetting();
+      // auto-end betting
+      if (left <= 0 && game.status === 'betting') endBetting();
     }
 
     function renderBets() {
       const div = document.getElementById('bets');
       let html = '<b>Live Bets:</b><br>';
       COLORS.forEach(c => {
-        const total = Object.values(game.bets).filter(b => b.color === c).reduce((s, b) => s + b.amount, 0);
-        if (total > 0) {
+        const total = Object.values(game.bets).filter(b=>b.color===c).reduce((s,b)=>s+b.amount,0);
+        if (total>0) {
           html += `<div class="bet">
-            <span style="color:${COLOR_HEX[c]}">${COLOR_NAME[c]}</span>: ${total.toLocaleString()} (${Object.values(game.bets).filter(b => b.color === c).length} bets)
+            <span style="color:${COLOR_HEX[c]}">${COLOR_NAME[c]}</span>:
+            ${total.toLocaleString()} (${Object.values(game.bets).filter(b=>b.color===c).length} bets)
           </div>`;
         }
       });
@@ -154,7 +163,9 @@
       const div = document.getElementById('myBet');
       if (game.bets[userId]) {
         const b = game.bets[userId];
-        div.innerHTML = `<div class="win-announce">Your bet: ${b.amount.toLocaleString()} on <b style="color:${COLOR_HEX[b.color]}">${COLOR_NAME[b.color]}</b></div>`;
+        div.innerHTML = `<div class="win-announce">
+          Your bet: ${b.amount.toLocaleString()} on <b style="color:${COLOR_HEX[b.color]}">${COLOR_NAME[b.color]}</b>
+        </div>`;
         document.getElementById('betInput').style.display = 'none';
       } else {
         div.innerHTML = '';
@@ -162,95 +173,103 @@
       }
     }
 
-    // === JOIN ===
-    document.getElementById('joinBtn').onclick = () => {
-      if (game.status !== 'waiting') return tg.showAlert('Round in progress!');
-      if (game.players.includes(userId)) return tg.showAlert('Already joined!');
+    /* --------------------------------------------------------------
+       HANDLERS (attached only after first load)
+    -------------------------------------------------------------- */
+    function attachHandlers() {
+      // JOIN
+      document.getElementById('joinBtn').onclick = () => {
+        if (!game) return;
+        if (game.status !== 'waiting') return tg.showAlert('Round already in progress!');
+        if (game.players.includes(userId)) return tg.showAlert('You already joined!');
 
-      game.players.push(userId);
-      game.status = 'betting';
-      game.endTime = Date.now() + 40000; // 40 sec
-      game.round++;
-      saveGame();
-      updateUI();
-      startPolling();
-    };
-
-    // === BET ===
-    document.querySelectorAll('.color-btn').forEach(btn => {
-      btn.onclick = () => {
-        if (game.status !== 'betting') return tg.showAlert('Betting closed!');
-        if (!game.players.includes(userId)) return tg.showAlert('Join first!');
-        if (game.bets[userId]) return tg.showAlert('Already bet!');
-
-        const amount = parseInt(document.getElementById('amount').value);
-        if (!amount || amount < 100 || amount > profile.balance) {
-          return tg.showAlert('Invalid amount! Min 100, max balance.');
-        }
-
-        const color = btn.dataset.color;
-        game.bets[userId] = { userId, username, color, amount };
-        game.pot += amount;
-        profile.balance -= amount;
-        profile.totalBet = (profile.totalBet || 0) + amount;
+        game.players.push(userId);
+        game.status = 'betting';
+        game.endTime = Date.now() + 40000;   // 40 s betting
+        game.round++;
         saveGame();
-        saveProfile();
-        tg.showAlert(`Bet ${amount.toLocaleString()} on ${COLOR_NAME[color]}!`);
         updateUI();
+        startPolling();
       };
-    });
 
-    // === END BETTING ===
+      // BET
+      document.querySelectorAll('.color-btn').forEach(btn => {
+        btn.onclick = () => {
+          if (!game) return;
+          if (game.status !== 'betting') return tg.showAlert('Betting closed!');
+          if (!game.players.includes(userId)) return tg.showAlert('Join first!');
+          if (game.bets[userId]) return tg.showAlert('You already bet!');
+
+          const amount = parseInt(document.getElementById('amount').value);
+          if (!amount || amount < 100 || amount > profile.balance)
+            return tg.showAlert('Invalid amount! (min 100, max balance)');
+
+          const color = btn.dataset.color;
+          game.bets[userId] = {userId, username, color, amount};
+          game.pot += amount;
+          profile.balance -= amount;
+          profile.totalBet = (profile.totalBet||0) + amount;
+          saveGame(); saveProfile();
+          tg.showAlert(`Bet ${amount.toLocaleString()} on ${COLOR_NAME[color]}!`);
+          updateUI();
+        };
+      });
+
+      // BALANCE
+      document.getElementById('balanceBtn').onclick = () => {
+        tg.showAlert(`Balance: ${profile.balance.toLocaleString()} coins\nWins: ${profile.wins}`);
+      };
+    }
+
+    /* --------------------------------------------------------------
+       END BETTING → SPIN → RESULT
+    -------------------------------------------------------------- */
     function endBetting() {
       game.status = 'spinning';
-      saveGame();
-      updateUI();
+      saveGame(); updateUI();
 
       setTimeout(() => {
-        const winnerColor = COLORS[Math.floor(Math.random() * COLORS.length)];
+        const winnerColor = COLORS[Math.floor(Math.random()*COLORS.length)];
         game.winner = winnerColor;
 
-        const winningBets = Object.values(game.bets).filter(b => b.color === winnerColor);
-        game.winners = [];
-        game.payouts = {};
+        const winning = Object.values(game.bets).filter(b=>b.color===winnerColor);
+        game.winners = []; game.payouts = {};
 
-        if (winningBets.length > 0) {
-          const totalWin = winningBets.reduce((s, b) => s + b.amount, 0);
-          const multiplier = Math.floor(game.pot / totalWin);
+        if (winning.length>0) {
+          const totalWin = winning.reduce((s,b)=>s+b.amount,0);
+          const mult = Math.floor(game.pot / totalWin);
 
-          winningBets.forEach(b => {
-            const payout = b.amount * multiplier;
+          winning.forEach(b => {
+            const payout = b.amount * mult;
             game.winners.push(b.username);
             game.payouts[b.userId] = payout;
 
-            // Update winner balance
-            tg.CloudStorage.getItem(`cba_profile_${b.userId}`, (err, data) => {
-              const p = data ? JSON.parse(data) : { balance: 10000 };
-              p.balance = (p.balance || 0) + payout - b.amount;
-              p.wins = (p.wins || 0) + 1;
+            // update winner profile
+            tg.CloudStorage.getItem(`cba_profile_${b.userId}`, (e,d) => {
+              const p = d ? JSON.parse(d) : {balance:10000, wins:0};
+              p.balance = (p.balance||0) + payout - b.amount;
+              p.wins = (p.wins||0) + 1;
               tg.CloudStorage.setItem(`cba_profile_${b.userId}`, JSON.stringify(p));
             });
           });
         }
 
         game.status = 'finished';
-        saveGame();
-        updateUI();
+        saveGame(); updateUI();
       }, 2500);
     }
 
-    // === RESULT ===
     function showResult() {
       document.getElementById('game').style.display = 'none';
       document.getElementById('result').style.display = 'block';
 
       const myBet = game.bets[userId];
       const iWon = myBet && myBet.color === game.winner;
-      const myPayout = game.payouts[userId] || 0;
+      const myPayout = game.payouts[userId]||0;
 
       let winnersHtml = '';
       game.winners.forEach(w => {
-        const payout = Object.values(game.payouts).find((_, i) => game.winners[i] === w) || 0;
+        const payout = Object.values(game.payouts).find((_,i)=>game.winners[i]===w)||0;
         winnersHtml += `<div class="win-announce winner-glow">
           Winner: ${w} → +${payout.toLocaleString()} coins
         </div>`;
@@ -261,38 +280,34 @@
         <div class="color-btn ${game.winner}" style="width:100px;height:100px;margin:20px auto;"></div>
         <h3 style="color:${COLOR_HEX[game.winner]}">WIN: ${COLOR_NAME[game.winner]}</h3>
         <p>Pot: ${game.pot.toLocaleString()} coins</p>
-        ${winnersHtml || '<p>No winners</p>'}
+        ${winnersHtml||'<p>No winners</p>'}
         ${iWon ? `<div class="win-announce">YOU WON +${myPayout.toLocaleString()}!</div>` : ''}
         ${myBet && !iWon ? `<div class="win-announce lose">Lost ${myBet.amount.toLocaleString()}</div>` : ''}
         <br><button onclick="location.reload()">Next Round</button>
       `;
 
-      // Auto-reset
       setTimeout(resetGame, 12000);
     }
 
     function resetGame() {
-      game = { round: game.round, players: [], bets: {}, pot: 0, status: 'waiting', winner: null, endTime: 0, winners: [], payouts: {} };
-      saveGame();
-      location.reload();
+      game = {round:game.round, players:[], bets:{}, pot:0, status:'waiting',
+              winner:null, endTime:0, winners:[], payouts:{}};
+      saveGame(); location.reload();
     }
 
-    // === POLLING ===
+    /* --------------------------------------------------------------
+       POLLING
+    -------------------------------------------------------------- */
     function startPolling() {
       clearInterval(pollInterval);
       pollInterval = setInterval(loadData, 1800);
     }
 
-    // === BALANCE ===
-    document.getElementById('balanceBtn').onclick = () => {
-      tg.showAlert(`Balance: ${profile.balance.toLocaleString()} coins\nWins: ${profile.wins}`);
-    };
-
-    // === INIT ===
-    loadData();
-    setInterval(() => {
-      if (game?.status === 'betting') updateUI();
-    }, 1000);
+    /* --------------------------------------------------------------
+       INIT
+    -------------------------------------------------------------- */
+    loadData();                       // first load → attaches handlers
+    setInterval(() => { if (game && game.status==='betting') updateUI(); }, 1000);
 
     tg.MainButton.text = "Invite Friends";
     tg.MainButton.show();
