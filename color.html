@@ -20,8 +20,10 @@
     .bet { background:#16213e; padding:8px; margin:3px; border-radius:8px; }
     #pot { font-size:1.3em; font-weight:bold; color:#ffd700; }
     #timer { font-size:2em; color:#ff4757; }
+    #winners { font-size:1.2em; color:#2ed573; margin:20px; }
     .winner { animation: glow 1s infinite; }
     @keyframes glow { 0%,100% { box-shadow:0 0 15px #ffd700; } 50% { box-shadow:0 0 30px #ff6b6b; } }
+    .win-announce { background:linear-gradient(45deg,#2ed573,#1abc9c); padding:15px; border-radius:12px; margin:10px; font-weight:bold; }
   </style>
 </head>
 <body>
@@ -29,24 +31,25 @@
   <div id="lobby">
     <button id="joinBtn">/join</button>
     <button id="balanceBtn">Balance</button>
-    <button id="topBtn">Top Players</button>
+    <button id="topBtn">Top 10</button>
   </div>
 
   <div id="game" style="display:none;">
     <div id="status"></div>
-    <div id="timer">30</div>
+    <div id="timer">--</div>
     <div id="pot">Pot: 0 coins</div>
-    <div id="betAmount">
-      <input type="number" id="amount" placeholder="Amount" min="100" style="padding:10px; width:120px; margin:10px; border-radius:8px; border:none;" />
+    <div id="betSection">
+      <input type="number" id="amount" placeholder="Bet Amount (min 100)" min="100" style="padding:10px; width:140px; margin:10px; border-radius:8px; border:none;" />
       <div>
-        <div class="color-btn red" data-color="red"></div>
-        <div class="color-btn blue" data-color="blue"></div>
-        <div class="color-btn green" data-color="green"></div>
-        <div class="color-btn yellow" data-color="yellow"></div>
-        <div class="color-btn purple" data-color="purple"></div>
+        <div class="color-btn red" data-color="red" title="Red"></div>
+        <div class="color-btn blue" data-color="blue" title="Blue"></div>
+        <div class="color-btn green" data-color="green" title="Green"></div>
+        <div class="color-btn yellow" data-color="yellow" title="Yellow"></div>
+        <div class="color-btn purple" data-color="purple" title="Purple"></div>
       </div>
     </div>
     <div id="bets"></div>
+    <div id="myBet"></div>
   </div>
 
   <div id="result" style="display:none;"></div>
@@ -56,180 +59,267 @@
     tg.ready(); tg.expand();
     const user = tg.initDataUnsafe.user;
     const chatId = tg.initDataUnsafe.chat?.id || 'private';
-    const userId = user.id;
-    const userName = user.first_name || 'Player';
+    const userId = user.id.toString();
+    const userName = user.username ? `@${user.username}` : user.first_name || 'Player';
 
     const COLORS = ['red', 'blue', 'green', 'yellow', 'purple'];
+    const COLOR_NAMES = { red:'Red', blue:'Blue', green:'Green', yellow:'Yellow', purple:'Purple' };
     const COLOR_MAP = { red:'#e74c3c', blue:'#3498db', green:'#2ecc71', yellow:'#f1c40f', purple:'#9b59b6' };
     const STORAGE = `cba_${chatId}`;
-    const PROFILE = `profile_${userId}`;
+    const LEADERBOARD = `lb_${chatId}`;
+    const PROFILE_PREFIX = `profile_`;
 
-    let game = {}, profile = {}, timer, poll;
+    let game = {}, profile = {}, myBalance = 10000, poll;
 
-    // Load
-    function load() {
+    // Load all data
+    function loadAll() {
       tg.CloudStorage.getItem(STORAGE, (err, data) => {
-        game = data ? JSON.parse(data) : { round: 0, players: [], bets: {}, pot: 0, status: 'waiting', winner: null, endTime: 0 };
-        update();
+        game = data ? JSON.parse(data) : { 
+          round: 0, players: [], bets: {}, pot: 0, status: 'waiting', 
+          winner: null, endTime: 0, winners: [], payouts: {}
+        };
+        updateUI();
       });
-      tg.CloudStorage.getItem(PROFILE, (err, data) => {
-        profile = data ? JSON.parse(data) : { balance: 10000, wins: 0, bets: 0 };
-        document.getElementById('balanceBtn').textContent = `Balance: ${profile.balance}`;
+      
+      tg.CloudStorage.getItem(`${PROFILE_PREFIX}${userId}`, (err, data) => {
+        profile = data ? JSON.parse(data) : { balance: 10000, wins: 0, totalBets: 0, netProfit: 0 };
+        myBalance = profile.balance;
+        updateBalanceBtn();
       });
     }
 
-    function save() {
+    function saveGame() {
       tg.CloudStorage.setItem(STORAGE, JSON.stringify(game));
-      tg.CloudStorage.setItem(PROFILE, JSON.stringify(profile));
     }
 
-    // UI
-    function update() {
+    function saveProfile() {
+      tg.CloudStorage.setItem(`${PROFILE_PREFIX}${userId}`, JSON.stringify(profile));
+      updateLeaderboard();
+    }
+
+    function updateBalanceBtn() {
+      document.getElementById('balanceBtn').textContent = `💰 ${myBalance.toLocaleString()}`;
+    }
+
+    // Update UI
+    function updateUI() {
       const now = Date.now();
-      const timeLeft = game.endTime ? Math.max(0, Math.floor((game.endTime - now)/1000)) : 0;
+      const timeLeft = game.endTime ? Math.max(0, Math.ceil((game.endTime - now) / 1000)) : 0;
 
-      if (game.status === 'finished') {
-        showResult();
-        return;
-      }
-
+      // Show lobby or game
       document.getElementById('lobby').style.display = game.status === 'waiting' ? 'block' : 'none';
       document.getElementById('game').style.display = game.status !== 'waiting' ? 'block' : 'none';
 
       if (game.status === 'betting') {
+        document.getElementById('status').innerHTML = `
+          <b>🔥 Round ${game.round}</b><br>
+          Players: ${game.players.length}/12 | Pot: <span id="pot">${game.pot.toLocaleString()}</span> coins<br>
+          <small>Bet before timer ends!</small>
+        `;
         document.getElementById('timer').textContent = timeLeft;
-        document.getElementById('pot').textContent = `Pot: ${game.pot} coins`;
-        document.getElementById('status').innerHTML = `<b>Round ${game.round}</b> - Betting open!<br>Players: ${game.players.length}/10`;
+        document.getElementById('pot').textContent = game.pot.toLocaleString();
         renderBets();
+        renderMyBet();
+      } else if (game.status === 'spinning') {
+        document.getElementById('status').innerHTML = '<h2>🎲 SPINNING...</h2>';
+        document.getElementById('timer').textContent = '';
+        document.getElementById('betSection').style.display = 'none';
+      } else if (game.status === 'finished') {
+        showResult();
       }
 
-      if (timeLeft === 0 && game.status === 'betting') {
-        endBetting();
+      // Auto-end betting
+      if (timeLeft <= 0 && game.status === 'betting') {
+        endBettingPhase();
       }
     }
 
     function renderBets() {
       const betsDiv = document.getElementById('bets');
-      betsDiv.innerHTML = '<b>Bets:</b><br>';
+      let html = '<b>📊 Current Bets:</b><br>';
       COLORS.forEach(c => {
-        const total = Object.values(game.bets).filter(b => b.color === c).reduce((a,b) => a + b.amount, 0);
+        const colorBets = Object.values(game.bets).filter(b => b.color === c);
+        const total = colorBets.reduce((sum, b) => sum + b.amount, 0);
         if (total > 0) {
-          const count = Object.values(game.bets).filter(b => b.color === c).length;
-          betsDiv.innerHTML += `<div class="bet"><b style="color:${COLOR_MAP[c]}">${c.toUpperCase()}</b>: ${total} (${count} bets)</div>`;
+          html += `<div class="bet">
+            <span style="color:${COLOR_MAP[c]}; font-weight:bold">${COLOR_NAMES[c]}</span>: 
+            ${total.toLocaleString()} coins (${colorBets.length} bets)
+          </div>`;
         }
       });
+      betsDiv.innerHTML = html;
     }
 
-    // Join
+    function renderMyBet() {
+      const myBetDiv = document.getElementById('myBet');
+      if (game.bets[userId]) {
+        const bet = game.bets[userId];
+        myBetDiv.innerHTML = `<div class="win-announce">
+          ✅ Your bet: ${bet.amount.toLocaleString()} on <span style="color:${COLOR_MAP[bet.color]}">${COLOR_NAMES[bet.color]}</span>
+        </div>`;
+        document.getElementById('betSection').style.display = 'none';
+      } else {
+        myBetDiv.innerHTML = '';
+        document.getElementById('betSection').style.display = 'block';
+      }
+    }
+
+    // JOIN
     document.getElementById('joinBtn').onclick = () => {
-      if (game.status !== 'waiting') return alert("Round in progress!");
-      if (game.players.includes(userId)) return alert("Already joined!");
+      if (game.status !== 'waiting') {
+        tg.showAlert('⏳ Round already started!');
+        return;
+      }
+      if (game.players.includes(userId)) {
+        tg.showAlert('✅ Already joined!');
+        return;
+      }
 
       game.players.push(userId);
       game.status = 'betting';
-      game.endTime = Date.now() + 30000; // 30 sec
-      game.round++;
-      save();
-      update();
-      startPoll();
+      game.endTime = Date.now() + 45000; // 45 sec betting
+      game.round = (game.round || 0) + 1;
+      saveGame();
+      tg.showAlert('✅ Joined Round ' + game.round + '!');
+      updateUI();
     };
 
-    // Bet
+    // BET
     document.querySelectorAll('.color-btn').forEach(btn => {
       btn.onclick = () => {
-        if (game.status !== 'betting') return;
-        if (!game.players.includes(userId)) return alert("Join first!");
+        if (game.status !== 'betting') return tg.showAlert('❌ Betting closed!');
+        if (!game.players.includes(userId)) return tg.showAlert('❌ Join first!');
 
         const amount = parseInt(document.getElementById('amount').value);
-        if (!amount || amount < 100 || amount > profile.balance) return alert("Invalid amount!");
+        if (!amount || amount < 100 || amount > myBalance) {
+          return tg.showAlert('❌ Invalid amount! (min 100, max balance)');
+        }
 
         const color = btn.dataset.color;
-        if (game.bets[userId]) return alert("Already bet!");
+        if (game.bets[userId]) return tg.showAlert('❌ Already bet!');
 
-        game.bets[userId] = { name: userName, color, amount };
+        // Place bet
+        game.bets[userId] = { userId, userName, color, amount };
         game.pot += amount;
-        profile.balance -= amount;
-        profile.bets++;
-        save();
-        alert(`Bet ${amount} on ${color}!`);
-        update();
+        profile.balance = myBalance -= amount;
+        profile.totalBets++;
+        saveGame();
+        saveProfile();
+        tg.showAlert(`✅ Bet ${amount.toLocaleString()} on ${COLOR_NAMES[color].toUpperCase()}!`);
+        updateUI();
       };
     });
 
-    // End Betting
-    function endBetting() {
+    // END BETTING → SPIN → WINNERS
+    function endBettingPhase() {
       game.status = 'spinning';
-      save();
+      saveGame();
+      updateUI();
 
       setTimeout(() => {
-        const winner = COLORS[Math.floor(Math.random() * COLORS.length)];
-        game.winner = winner;
-        game.status = 'finished';
+        // Pick winner
+        const winnerColor = COLORS[Math.floor(Math.random() * COLORS.length)];
+        game.winner = winnerColor;
 
-        const winningBets = Object.values(game.bets).filter(b => b.color === winner);
-        const totalWin = winningBets.reduce((a,b) => a + b.amount, 0);
-        const pot = game.pot;
-
-        if (totalWin > 0) {
-          const payout = Math.floor(pot / totalWin); // multiplier
-          winningBets.forEach(b => {
-            const userP = getProfileSync(b.name); // simplified
-            if (userP) {
-              userP.balance += b.amount * payout;
-              userP.wins++;
-            }
+        // Calculate winners & payouts
+        const winningBets = Object.values(game.bets).filter(b => b.color === winnerColor);
+        game.winners = winningBets.map(b => b.userName);
+        
+        if (winningBets.length > 0) {
+          const totalWinningBets = winningBets.reduce((sum, b) => sum + b.amount, 0);
+          const multiplier = Math.floor(game.pot / totalWinningBets);
+          
+          winningBets.forEach(bet => {
+            const payout = bet.amount * multiplier;
+            game.payouts[bet.userId] = payout;
+            
+            // Update winner profile
+            tg.CloudStorage.setItem(`${PROFILE_PREFIX}${bet.userId}`, JSON.stringify({
+              balance: (profile.balance || 0) + payout,
+              wins: (profile.wins || 0) + 1,
+              totalBets: profile.totalBets || 0,
+              netProfit: ((profile.netProfit || 0) + (payout - bet.amount))
+            }));
           });
         }
 
-        // Reset for next
-        setTimeout(() => {
-          game = { round: game.round, players: [], bets: {}, pot: 0, status: 'waiting', winner: null, endTime: 0 };
-          save();
-          load();
-        }, 8000);
-
-        save();
-        update();
+        game.status = 'finished';
+        saveGame();
+        updateUI();
       }, 3000);
     }
 
     function showResult() {
       document.getElementById('game').style.display = 'none';
       document.getElementById('result').style.display = 'block';
-      const won = game.bets[userId]?.color === game.winner;
-      const earnings = won ? game.bets[userId].amount * (game.pot / Object.values(game.bets).filter(b => b.color === game.winner).reduce((a,b) => a + b.amount, 0)) : 0;
+
+      const myBet = game.bets[userId];
+      const iWon = myBet && myBet.color === game.winner;
+      const myPayout = game.payouts[userId] || 0;
+
+      let winnersHtml = '<div id="winners">';
+      game.winners.forEach(winner => {
+        const payout = game.payouts[Object.values(game.bets).find(b => b.userName === winner)?.userId] || 0;
+        winnersHtml += `<div class="win-announce winner">
+          🏆 Winner: ${winner} <span style="color:#ffd700">+${payout.toLocaleString()} coins</span>
+        </div>`;
+      });
+      winnersHtml += '</div>';
 
       document.getElementById('result').innerHTML = `
-        <h2 class="${won ? 'winner' : ''}">🎉 Round ${game.round} Result!</h2>
-        <div class="color-btn ${game.winner}" style="width:100px;height:100px;margin:20px auto;"></div>
-        <p>Winning Color: <b style="color:${COLOR_MAP[game.winner]}">${game.winner.toUpperCase()}</b></p>
-        <p>Pot: <b>${game.pot}</b> coins</p>
-        ${won ? `<p style="color:#2ed573">You WON +${Math.floor(earnings)}!</p>` : `<p style="color:#ff6b6b">You lost ${game.bets[userId]?.amount || 0}</p>`}
-        <button onclick="document.getElementById('result').style.display='none'; document.getElementById('lobby').style.display='block';">Back</button>
+        <h2 class="winner">🎉 Round ${game.round} Results!</h2>
+        <div class="color-btn ${game.winner}" style="width:120px; height:120px; margin:20px auto;"></div>
+        <h3 style="color:${COLOR_MAP[game.winner]}">Winning Color: ${COLOR_NAMES[game.winner].toUpperCase()}</h3>
+        <p>💰 Total Pot: ${game.pot.toLocaleString()} coins</p>
+        ${winnersHtml}
+        ${iWon ? `
+          <div class="win-announce" style="font-size:1.3em;">
+            🎊 YOU WON ${myPayout.toLocaleString()} coins! (x${Math.floor(myPayout / myBet.amount)})
+          </div>
+        ` : myBet ? `
+          <div style="color:#ff6b6b; padding:15px;">
+            ❌ Lost ${myBet.amount.toLocaleString()} coins
+          </div>` : ''}
+        <br><button onclick="location.reload()">Next Round</button>
       `;
+
+      // Reset after 10s
+      setTimeout(() => {
+        game = { round: game.round, players: [], bets: {}, pot: 0, status: 'waiting', winner: null, endTime: 0, winners: [], payouts: {} };
+        saveGame();
+        loadAll();
+      }, 10000);
     }
 
-    // Top
-    document.getElementById('topBtn').onclick = () => {
-      let tops = [];
-      // Simplified: scan all profiles (in real use, keep a leaderboard key)
-      alert("Top players coming soon!");
+    // Balance
+    document.getElementById('balanceBtn').onclick = () => {
+      tg.showAlert(`💰 Your Balance: ${myBalance.toLocaleString()} coins\nWins: ${profile.wins || 0}`);
     };
 
-    // Poll
-    function startPoll() {
+    // Leaderboard (simplified)
+    document.getElementById('topBtn').onclick = () => {
+      tg.showAlert('🏆 Top 10 coming in next update!');
+    };
+
+    function updateLeaderboard() {
+      // Simplified - in full version, aggregate all profiles
+    }
+
+    // Poll for live updates
+    function startPolling() {
       clearInterval(poll);
-      poll = setInterval(load, 2000);
+      poll = setInterval(loadAll, 1500);
     }
 
     // Init
-    load();
-    tg.MainButton.text = "Share Game";
-    tg.MainButton.show();
-    tg.MainButton.onClick(() => tg.openTelegramLink(`https://t.me/${tg.initDataUnsafe.bot_username}?startgroup=true`));
+    loadAll();
+    startPolling();
 
-    // Helper
-    function getProfileSync(name) { return profile; } // placeholder
+    tg.MainButton.text = "💬 Share to Group";
+    tg.MainButton.show();
+    tg.MainButton.onClick(() => {
+      tg.sendData(JSON.stringify({action: 'share'}));
+    });
   </script>
 </body>
 </html>
